@@ -23,31 +23,51 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 
-def extract_artifact_links(html_file_path: str) -> Dict[str, str]:
+def extract_artifact_links(html_file_path: str) -> Dict[str, Dict[str, str]]:
     """
-    Parse an HTML file and extract artifact download links.
+    Parse an HTML file and extract artifact download links with their sections.
 
     Searches for anchor tags containing "artifactContent" in their href
-    attribute and maps the link text to the URL.
+    attribute and maps the link text to the URL along with the section
+    (e.g., "Old Testament - wav", "New Testament - mp3") it belongs to.
 
     Args:
         html_file_path: Path to the HTML file containing artifact links.
 
     Returns:
-        A dictionary mapping artifact names (link text) to their download URLs.
+        A dictionary mapping artifact names (link text) to a dict containing:
+            - "url": The download URL
+            - "section": The section/header the artifact belongs to
     """
     with open(html_file_path, "r", encoding="utf-8") as f:
         soup = BeautifulSoup(f, "html.parser")
 
-    result: Dict[str, str] = {}
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        text = a.get_text(strip=True)
-        if "artifactContent" in href and text:
-            # Skip Word documents - we only need the audio files
-            if text == "Word":
-                continue
-            result[text] = href
+    result: Dict[str, Dict[str, str]] = {}
+
+    # Find all section containers (li elements with an "opener" link)
+    for section_li in soup.find_all("li"):
+        opener = section_li.find("a", class_="opener")
+        if not opener:
+            continue
+
+        # Extract section name from the opener link
+        section_name = opener.get_text(strip=True)
+
+        # Find the slide div containing the artifact links
+        slide_div = section_li.find("div", class_="slide")
+        if not slide_div:
+            continue
+
+        # Extract all artifact links within this section
+        for a in slide_div.find_all("a", href=True):
+            href = a["href"]
+            text = a.get_text(strip=True)
+            if "artifactContent" in href and text:
+                # Skip Word documents - we only need the audio files
+                if text == "Word":
+                    continue
+                result[text] = {"url": href, "section": section_name}
+
     return result
 
 
@@ -136,7 +156,7 @@ def unzip_file_with_progress(zip_path: Path, extract_to: Path) -> None:
 
 
 def download_and_unzip_all(
-    links: Dict[str, str],
+    links: Dict[str, Dict[str, str]],
     output_dir: str,
     *,
     overwrite: bool = False,
@@ -147,12 +167,13 @@ def download_and_unzip_all(
 
     Processes each link by downloading the ZIP file (if not already present
     or if overwrite is enabled) and extracting its contents. Shows overall
-    progress across all resources.
+    progress across all resources. Files are organized by section.
 
     Args:
-        links: Dictionary mapping resource names to download URLs.
+        links: Dictionary mapping resource names to dicts containing
+            "url" and "section" keys.
         output_dir: Base directory where resources will be saved.
-            Each resource gets its own subdirectory.
+            Each resource gets its own subdirectory under its section.
         overwrite: If True, re-download files even if they exist.
             Defaults to False.
         timeout: Request timeout in seconds for each download.
@@ -168,12 +189,17 @@ def download_and_unzip_all(
     results: Dict[str, Path] = {}
 
     with tqdm(links.items(), desc="Processing books", unit="book") as overall_bar:
-        for name, url in overall_bar:
+        for name, info in overall_bar:
+            url = info["url"]
+            section = safe_folder_name(info["section"])
             folder_name = safe_folder_name(name)
-            book_dir = out / folder_name
+
+            # Organize by section, then by book name
+            section_dir = out / section
+            book_dir = section_dir / folder_name
             zip_path = book_dir / f"{folder_name}.zip"
 
-            overall_bar.set_postfix_str(folder_name)
+            overall_bar.set_postfix_str(f"{section}/{folder_name}")
 
             if zip_path.exists() and not overwrite:
                 pass
