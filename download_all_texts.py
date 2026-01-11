@@ -1,11 +1,10 @@
-import os
 import time
 from pathlib import Path
-from utils import download_audios
+from utils import downloads_texts
 
 # Directory containing HTML files
-html_dir = Path("html_files")
-output_base_dir = Path("audios")
+html_dir = Path("html_files/text")
+output_base_dir = Path("texts")
 
 # Get all HTML files
 html_files = sorted(html_dir.glob("*.html"))
@@ -20,12 +19,12 @@ for i, html_path in enumerate(html_files):
     
     try:
         # 1) Parse HTML -> dict(name -> URL)
-        links = download_audios.extract_artifact_links(str(html_path))
+        links = downloads_texts.extract_artifact_links(str(html_path))
         print(f"Found {len(links)} artifacts")
         
         # 2) Download + unzip into folders
         output_dir = output_base_dir / lang_name
-        download_audios.download_and_unzip_all(links, str(output_dir), overwrite=False, timeout=60)
+        downloads_texts.download_and_unzip_all(links, str(output_dir), overwrite=False, timeout=60)
         
         print(f"✓ Successfully processed {lang_name}")
         
@@ -36,7 +35,7 @@ for i, html_path in enumerate(html_files):
     # Sleep 1 minute between languages (except after the last one)
     if i < len(html_files) - 1:
         print(f"\nSleeping for 1 minute before next language...")
-        time.sleep(60)
+        # time.sleep(60)
 
 print(f"\n{'='*60}")
 print("All languages processed!")
