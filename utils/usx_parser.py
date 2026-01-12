@@ -18,15 +18,18 @@ import pandas as pd
 # Styles we treat as "opening-of-chapter heading" BEFORE verse 1
 HEADING_STYLES = {"h", "mt1", "mt2", "mt3", "s1", "s2", "s3", "ms1", "ms2", "toc1", "toc2", "toc3"}
 
-# Regex handles verse ranges like "1CO 1:5-6" as well as single verses "1CO 1:5"
-_USX_ID_RE = re.compile(r"^\s*([A-Z0-9]+)\s+(\d+):(\d+)(?:-\d+)?\s*$")
+# Regex handles various verse ID formats:
+# - Simple: "1CO 1:5"
+# - Ranges: "1CO 1:5-6"
+# - Comma-separated: "MAT 18:10,11"
+_USX_ID_RE = re.compile(r"^\s*([A-Z0-9]+)\s+(\d+):(\d+)(?:[-,]\d+)*\s*$")
 _CHAP_ID_RE = re.compile(r"^\s*([A-Z0-9]+)\s+(\d+)\s*$")
 
 
 def _parse_usx_id(usx_id: str) -> Tuple[str, int, int]:
-    """Parse a USX verse ID like '1CO 1:1' or '1CO 1:5-6' into (book, chapter, verse).
+    """Parse a USX verse ID like '1CO 1:1', '1CO 1:5-6', or 'MAT 18:10,11' into (book, chapter, verse).
     
-    For verse ranges, returns the first verse number.
+    For verse ranges or comma-separated verses, returns the first verse number.
     """
     m = _USX_ID_RE.match(usx_id)
     if not m:
