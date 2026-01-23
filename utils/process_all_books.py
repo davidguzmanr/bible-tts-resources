@@ -1,14 +1,9 @@
 # Script to process all Bible books for Lingala
 import os
+import argparse
 import pandas as pd
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# Base paths
-BASE_PATH = "data/audios/Lingala"
-TIMING_FOLDER = os.path.join(BASE_PATH, "Timing Files/Timing Files Bundle")
-USFM_FOLDER = "data/texts/Lingala/Paratext (USFM)/release/USX_1"
-OUTPUT_BASE = os.path.join(BASE_PATH, "Alignment")
 
 # Testaments to process
 TESTAMENTS = ["New Testament - mp3", "Old Testament - mp3"]
@@ -20,12 +15,16 @@ def get_book_code(book_folder_path):
             return f.split('_')[0]
     return None
 
-def build_dataframe():
+def build_dataframe(base_path):
     """Build a dataframe with all books to process"""
+    timing_folder = os.path.join(base_path, "Timing Files/Timing Files Bundle")
+    usfm_folder = os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path), "Paratext (USFM)/release/USX_1")
+    output_base = os.path.join(base_path, "Alignment")
+    
     rows = []
     
     for testament in TESTAMENTS:
-        testament_path = os.path.join(BASE_PATH, testament)
+        testament_path = os.path.join(base_path, testament)
         if not os.path.exists(testament_path):
             print(f"Warning: {testament_path} does not exist")
             continue
@@ -44,9 +43,8 @@ def build_dataframe():
             
             # Build paths
             wav_folder = book_folder_path
-            timing_folder = TIMING_FOLDER
-            book_sfm = os.path.join(USFM_FOLDER, f"{book_code}.usfm")
-            output = os.path.join(OUTPUT_BASE, book_folder)
+            book_sfm = os.path.join(usfm_folder, f"{book_code}.usfm")
+            output = os.path.join(output_base, book_folder)
             
             # Check if USFM file exists
             usfm_exists = os.path.exists(book_sfm)
@@ -115,8 +113,20 @@ def run_processing(df, script_path="utils/split_verse_lingala.py", max_workers=4
                 print(f"[{completed}/{total}] ✗ Error processing {book_name}: {e}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Process all Bible books for a given language')
+    parser.add_argument('-base_path', type=str, required=True,
+                        help='Base path to audio files (e.g., data/audios/Lingala)')
+    parser.add_argument('-workers', type=int, default=8,
+                        help='Number of parallel workers (default: 8)')
+    args = parser.parse_args()
+    
     # Build and display the dataframe
-    df = build_dataframe()
+    df = build_dataframe(args.base_path)
+    
+    # Save dataframe to CSV
+    csv_path = os.path.join(args.base_path, "books_to_process.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"DataFrame saved to {csv_path}")
     
     print("\n=== Books to Process ===")
     print(f"Total books: {len(df)}")
@@ -134,17 +144,7 @@ if __name__ == '__main__':
         print("\n=== Missing USFM Files ===")
         print(missing[['book_name', 'book_code', 'book_sfm']].to_string())
     
-    # Ask for confirmation before processing
+    # Run processing
     print("\n" + "="*60)
-    response = input("Do you want to run processing for all books? (yes/no): ")
-    if response.lower() == 'yes':
-        workers = input("How many parallel workers? (default: 4): ").strip()
-        max_workers = int(workers) if workers else 4
-        run_processing(df, max_workers=max_workers)
-        print("\n=== All Processing Complete ===")
-    else:
-        print("Processing cancelled. You can inspect the dataframe above.")
-        # Save dataframe to CSV for reference
-        csv_path = "data/audios/Lingala/books_to_process.csv"
-        df.to_csv(csv_path, index=False)
-        print(f"DataFrame saved to {csv_path}")
+    run_processing(df, max_workers=args.workers)
+    print("\n=== All Processing Complete ===")
