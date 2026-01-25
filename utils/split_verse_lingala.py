@@ -39,7 +39,8 @@ if __name__ == '__main__':
     if not os.path.exists(f"{output}"):
         os.makedirs(f"{output}")
     
-    dict_chap_verse = defaultdict(lambda : [])
+    # Use dict of dicts to handle non-sequential verse numbers (e.g., merged or skipped verses)
+    dict_chap_verse = defaultdict(dict)
     current_chap = None
     current_verse = None
     # Open file for read
@@ -54,20 +55,33 @@ if __name__ == '__main__':
                 continue
             
             if current_txt[0] =='\\v':
-                current_verse = current_txt[1]
-                # TODO: Are we not missing some aspect of the language here ?
-                content = re.sub(r"[^a-zA-Z0-9?'’‘´`-]+", ' ', textline[len(current_txt[0]+current_txt[1])+2:]).strip()
-                dict_chap_verse[current_chap].append(content)
+                # Handle verse ranges like "1-2" by taking the first number
+                verse_str = current_txt[1].split('-')[0]
+                current_verse = int(verse_str)
+                # Extract verse text, preserving Unicode characters (for non-Latin scripts)
+                # Remove USFM markers (\word), footnotes, and normalize whitespace
+                raw_content = textline[len(current_txt[0]+current_txt[1])+2:]
+                content = re.sub(r'\\[a-z]+\*?', '', raw_content)  # Remove USFM markers
+                content = re.sub(r'\s+', ' ', content).strip()     # Normalize whitespace
+                dict_chap_verse[current_chap][current_verse] = content
             elif len(current_txt) == 1:
                 continue 
             elif current_chap and current_verse:
-                content = re.sub(r"[^a-zA-Z0-9?'''´`-]+", ' ', textline[len(current_txt[0])+2:]).strip()
-                dict_chap_verse[current_chap][int(current_verse)-1] += " " + content
+                # Extract continuation text, preserving Unicode characters
+                raw_content = textline[len(current_txt[0])+1:] if current_txt[0].startswith('\\') else textline
+                content = re.sub(r'\\[a-z]+\*?', '', raw_content)  # Remove USFM markers
+                content = re.sub(r'\s+', ' ', content).strip()     # Normalize whitespace
+                # Safely append to existing verse content
+                if content:
+                    if current_verse in dict_chap_verse[current_chap]:
+                        dict_chap_verse[current_chap][current_verse] += " " + content
+                    else:
+                        dict_chap_verse[current_chap][current_verse] = content
     
     print(f"\n=== SFM Parsing Results ===")
     print(f"Total chapters found: {len(dict_chap_verse)}")
-    for chap, verses in dict_chap_verse.items():
-        print(f"  Chapter {chap}: {len(verses)} verses")
+    for chap, verses in sorted(dict_chap_verse.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 0):
+        print(f"  Chapter {chap}: {len(verses)} verses (verse numbers: {sorted(verses.keys())[:5]}...)" if len(verses) > 5 else f"  Chapter {chap}: {len(verses)} verses")
     
     audio_files = [f for f in os.listdir(path_to_wavs) if f.endswith('.wav') or f.endswith('.mp3')]
     print(f"\n=== Audio Files Found ===")
@@ -113,13 +127,25 @@ if __name__ == '__main__':
             audio = os.path.join(path_to_wavs, file)
             output_file = os.path.join(output, f"{book_chap}_{verse_key}.wav")
             
+            # Fix timing format: replace commas with periods for ffmpeg compatibility
+            start_time = dict_verse_time[verse_key][0].replace(',', '.')
+            
             if len(dict_verse_time[verse_key])==2:
-                os.system(f'ffmpeg -y -i "{audio}" -ss {dict_verse_time[verse_key][0]} -to {dict_verse_time[verse_key][1]} -loglevel error "{output_file}"')
+                end_time = dict_verse_time[verse_key][1].replace(',', '.')
+                os.system(f'ffmpeg -y -i "{audio}" -ss {start_time} -to {end_time} -loglevel error "{output_file}"')
             else:
-                os.system(f'ffmpeg -y -i "{audio}" -ss {dict_verse_time[verse_key][0]} -loglevel error "{output_file}"')
+                os.system(f'ffmpeg -y -i "{audio}" -ss {start_time} -loglevel error "{output_file}"')
+            
+            # Get verse number and look up text in dict (handles non-sequential verse numbers)
+            verse_num = int(verse_key.split('_')[1])
+            chap_num = str(int(chap))
+            verse_text = dict_chap_verse.get(chap_num, {}).get(verse_num, "")
+            
+            if not verse_text:
+                print(f"  Warning: No text found for chapter {chap_num}, verse {verse_num}")
             
             with open(os.path.join(output, f'{book_chap}_{verse_key}.txt'), "w", encoding="utf-8") as text_file:
-                text_file.write(dict_chap_verse[str(int(chap))][int(verse_key.split('_')[1])-1])
+                text_file.write(verse_text)
                 text_file.write("\n")  
         
         print(f"  Completed processing {book_chap}")

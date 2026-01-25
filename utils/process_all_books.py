@@ -82,7 +82,12 @@ def process_single_book(row, script_path="utils/split_verse_lingala.py"):
     if result.returncode == 0:
         return f"✓ Completed {row['book_name']} ({row['book_code']})"
     else:
-        return f"✗ Failed {row['book_name']}: {result.stderr[:200]}"
+        # Get last meaningful error line (skip progress bars and empty lines)
+        error_lines = [line for line in result.stderr.strip().split('\n') 
+                       if line.strip() and not line.startswith('Processing') 
+                       and not line.startswith('Splitting') and '|' not in line]
+        error_msg = error_lines[-1] if error_lines else result.stderr[-500:]
+        return f"✗ Failed {row['book_name']} ({row['book_code']}): {error_msg}"
 
 def run_processing(df, script_path="utils/split_verse_lingala.py", max_workers=4):
     """Run the split_verse script for each row in the dataframe in parallel"""
