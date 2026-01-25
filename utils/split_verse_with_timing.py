@@ -90,33 +90,59 @@ if __name__ == '__main__':
         print(f"First few files: {audio_files[:5]}")
     for file in tqdm(audio_files, desc="Processing audio chapters"):
         book_chap, ext = file.split('.')
-        book, chap = book_chap.split('_')
+        # Handle filenames with multiple underscores (e.g., "GEN_001") by splitting only on the last underscore
+        parts = book_chap.rsplit('_', 1)
+        if len(parts) != 2:
+            print(f"\n  Warning: Unexpected filename format '{file}', skipping")
+            continue
+        book, chap = parts
         
         # Global dictionary to keep verse, [time_start, time_end]
         dict_verse_time = defaultdict(lambda : [])
         timing_file_path = os.path.join(path_to_timings, f'{book_chap}.txt')
         print(f"\n  Looking for timing file: {timing_file_path}")
         print(f"  Timing file exists: {os.path.exists(timing_file_path)}")
+        
+        if not os.path.exists(timing_file_path):
+            print(f"  Error: Timing file not found: {timing_file_path}")
+            continue
+            
         # open the and read file on in the first repository             
-        with open(timing_file_path, 'r') as f:  # Open file for read
-            for textline in f:
-                verse_time = textline.split("\t")
-                # This handles the file version case
-                if len(verse_time) == 1 or len(verse_time[0].split()) == 1:
-                    continue
-                else:
-                    # This skips the Chapter Title and Headings
+        try:
+            with open(timing_file_path, 'r') as f:  # Open file for read
+                for line_num, textline in enumerate(f, 1):
+                    verse_time = textline.split("\t")
+                    # This handles the file version case
+                    if len(verse_time) == 1 or len(verse_time[0].split()) == 1:
+                        continue
                     
-                    verse, number = verse_time[0].split()
-                    if verse != "Verse":
-                        continue 
-                    else:
-                        time = verse_time[1]
-                        dict_verse_time[f'{verse}_{number.zfill(3)}'].append(time)
-                        if int(number)-1==0:
-                            pass
-                        else:
-                            dict_verse_time[f'{verse}_{str(int(number)-1).zfill(3)}'].append(time)
+                    # Parse the marker (e.g., "Verse 01", "Verse 14-15", "Chapter Title 01")
+                    marker_parts = verse_time[0].split()
+                    
+                    # Only process lines that start with "Verse"
+                    if len(marker_parts) < 2 or marker_parts[0] != "Verse":
+                        continue
+                    
+                    # Get the verse number, handling ranges like "14-15" or "01- 04"
+                    verse_str = marker_parts[1]
+                    # Remove any trailing/leading hyphens and spaces, take the first number
+                    verse_str = verse_str.strip().split('-')[0].strip()
+                    
+                    try:
+                        verse_number = int(verse_str)
+                    except ValueError:
+                        print(f"  Warning: Could not parse verse number from '{verse_time[0]}' in {timing_file_path}:{line_num}, skipping")
+                        continue
+                    
+                    time = verse_time[1]
+                    number_str = str(verse_number).zfill(3)
+                    dict_verse_time[f'Verse_{number_str}'].append(time)
+                    
+                    if verse_number - 1 > 0:
+                        prev_number_str = str(verse_number - 1).zfill(3)
+                        dict_verse_time[f'Verse_{prev_number_str}'].append(time)
+        except Exception as e:
+            raise ValueError(f"Error parsing timing file {timing_file_path}: {e}")
         
         print(f"  Verses with timing data: {len(dict_verse_time)}")
         if dict_verse_time:

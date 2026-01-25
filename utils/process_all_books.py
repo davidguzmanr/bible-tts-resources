@@ -8,12 +8,27 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Testaments to process
 TESTAMENTS = ["New Testament - mp3", "Old Testament - mp3"]
 
+def find_audio_files(folder_path):
+    """Recursively find audio files (mp3/wav) and return (folder_containing_them, list_of_files)"""
+    for root, dirs, files in os.walk(folder_path):
+        audio_files = [f for f in files if (f.endswith('.mp3') or f.endswith('.wav')) and '_' in f]
+        if audio_files:
+            return root, audio_files
+    return None, []
+
 def get_book_code(book_folder_path):
-    """Extract book code from mp3 files in the folder (e.g., '1CO' from '1CO_001.mp3')"""
-    for f in os.listdir(book_folder_path):
-        if f.endswith('.mp3') and '_' in f:
-            return f.split('_')[0]
+    """Extract book code from audio files in the folder (e.g., '1CO' from '1CO_001.mp3')
+    Searches recursively to handle nested folder structures."""
+    audio_folder, audio_files = find_audio_files(book_folder_path)
+    if audio_files:
+        # Return the book code from the first audio file
+        return audio_files[0].split('_')[0]
     return None
+
+def get_audio_folder(book_folder_path):
+    """Get the actual folder containing audio files (handles nested structures)"""
+    audio_folder, audio_files = find_audio_files(book_folder_path)
+    return audio_folder
 
 def build_dataframe(base_path):
     """Build a dataframe with all books to process"""
@@ -35,14 +50,17 @@ def build_dataframe(base_path):
             if not os.path.isdir(book_folder_path):
                 continue
                 
-            # Get book code from mp3 files
+            # Get book code from audio files (searches recursively)
             book_code = get_book_code(book_folder_path)
             if book_code is None:
                 print(f"Warning: Could not find book code for {book_folder}")
                 continue
             
-            # Build paths
-            wav_folder = book_folder_path
+            # Build paths - get the actual folder containing audio files
+            wav_folder = get_audio_folder(book_folder_path)
+            if wav_folder is None:
+                print(f"Warning: Could not find audio folder for {book_folder}")
+                continue
             book_sfm = os.path.join(usfm_folder, f"{book_code}.usfm")
             output = os.path.join(output_base, book_folder)
             
@@ -61,10 +79,11 @@ def build_dataframe(base_path):
             })
     
     df = pd.DataFrame(rows)
-    df = df.sort_values(['testament', 'book_name']).reset_index(drop=True)
+    if len(df) > 0:
+        df = df.sort_values(['testament', 'book_name']).reset_index(drop=True)
     return df
 
-def process_single_book(row, script_path="utils/split_verse_lingala.py"):
+def process_single_book(row, script_path="utils/split_verse_with_timing.py"):
     """Process a single book - used by parallel executor"""
     if not row['usfm_exists']:
         return f"Skipped {row['book_name']}: USFM file not found"
@@ -82,15 +101,43 @@ def process_single_book(row, script_path="utils/split_verse_lingala.py"):
     if result.returncode == 0:
         return f"✓ Completed {row['book_name']} ({row['book_code']})"
     else:
-        # Get last meaningful error line (skip progress bars and empty lines)
-        error_lines = [line for line in result.stderr.strip().split('\n') 
-                       if line.strip() and not line.startswith('Processing') 
-                       and not line.startswith('Splitting') and '|' not in line]
-        error_msg = error_lines[-1] if error_lines else result.stderr[-500:]
-        return f"✗ Failed {row['book_name']} ({row['book_code']}): {error_msg}"
+        # Get the last traceback and error message for better debugging
+        stderr = result.stderr.strip()
+        error_lines = stderr.split('\n')
+        
+        # Find the actual error (usually starts with a known error type)
+        error_types = ['ValueError', 'KeyError', 'FileNotFoundError', 'TypeError', 'IndexError', 'Exception', 'Error']
+        error_msg = None
+        traceback_file = None
+        
+        for i, line in enumerate(error_lines):
+            # Look for the file/line info from traceback
+            if 'File "' in line and ', line ' in line:
+                traceback_file = line.strip()
+            # Look for the actual error message
+            for err_type in error_types:
+                if line.strip().startswith(err_type):
+                    error_msg = line.strip()
+                    break
+            if error_msg:
+                break
+        
+        # Build informative error message
+        if error_msg:
+            if traceback_file:
+                return f"✗ Failed {row['book_name']} ({row['book_code']}): {error_msg}\n    Location: {traceback_file}\n    WAV folder: {row['wav_folder']}\n    Timing folder: {row['timing_folder']}"
+            else:
+                return f"✗ Failed {row['book_name']} ({row['book_code']}): {error_msg}"
+        else:
+            # Fallback: show last few meaningful lines
+            meaningful_lines = [line for line in error_lines 
+                               if line.strip() and not line.startswith('Processing') 
+                               and not line.startswith('Splitting') and '|' not in line]
+            error_msg = meaningful_lines[-1] if meaningful_lines else stderr[-500:]
+            return f"✗ Failed {row['book_name']} ({row['book_code']}): {error_msg}"
 
-def run_processing(df, script_path="utils/split_verse_lingala.py", max_workers=4):
-    """Run the split_verse script for each row in the dataframe in parallel"""
+def run_processing(df, script_path="utils/split_verse_with_timing.py", max_workers=4):
+    """Run the split_verse_with_timing script for each row in the dataframe in parallel"""
     # Filter to only books with USFM files
     df_to_process = df[df['usfm_exists']].copy()
     
@@ -119,14 +166,22 @@ def run_processing(df, script_path="utils/split_verse_lingala.py", max_workers=4
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process all Bible books for a given language')
-    parser.add_argument('-base_path', type=str, required=True,
+    parser.add_argument('-base_path', '--base_path', type=str, required=True,
                         help='Base path to audio files (e.g., data/audios/Lingala)')
-    parser.add_argument('-workers', type=int, default=8,
+    parser.add_argument('-workers', '--workers', type=int, default=8,
                         help='Number of parallel workers (default: 8)')
     args = parser.parse_args()
     
+    print(f"\n{'='*60}")
+    print(f"Processing: {args.base_path}")
+    print(f"{'='*60}")
+    
     # Build and display the dataframe
     df = build_dataframe(args.base_path)
+    
+    if len(df) == 0:
+        print("ERROR: No valid books found. Check folder structure and audio files.")
+        exit(1)
     
     # Save dataframe to CSV
     csv_path = os.path.join(args.base_path, "books_to_process.csv")
