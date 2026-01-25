@@ -1,8 +1,12 @@
 """
-Utilities for parsing USX (Unified Scripture XML) files into pandas DataFrames.
+Utilities for parsing USX (XML) and USFM (plain text) Bible files into pandas DataFrames.
 
-USX is an XML format for Bible scripture texts. This module provides functions
-to extract book, chapter, verse, and text content from USX files.
+This module provides functions to extract book, chapter, verse, and text content
+from both USX (Unified Scripture XML) and USFM (Unified Standard Format Markers) files.
+
+Supported formats:
+- USX: XML format with .usx extension
+- USFM: Plain text format with .usfm or .sfm extension
 """
 
 from __future__ import annotations
@@ -17,6 +21,10 @@ import pandas as pd
 
 # Styles we treat as "opening-of-chapter heading" BEFORE verse 1
 HEADING_STYLES = {"h", "mt1", "mt2", "mt3", "s1", "s2", "s3", "ms1", "ms2", "toc1", "toc2", "toc3"}
+
+# USFM markers for headings
+USFM_HEADING_MARKERS = {"\\h", "\\mt1", "\\mt2", "\\mt3", "\\s1", "\\s2", "\\s3", 
+                         "\\ms1", "\\ms2", "\\toc1", "\\toc2", "\\toc3"}
 
 # Regex handles various verse ID formats:
 # - Simple: "1CO 1:5"
@@ -232,6 +240,258 @@ def usx_directory_to_dataframe(
     dfs = []
     for usx_file in usx_files:
         df = usx_to_dataframe(usx_file, include_headings=include_headings)
+        dfs.append(df)
+    
+    if dfs:
+        return pd.concat(dfs, ignore_index=True)
+    return pd.DataFrame(columns=["book", "chapter", "verse", "text"])
+
+
+def usfm_to_dataframe(
+    file_path: Union[str, Path],
+    include_headings: bool = True,
+) -> pd.DataFrame:
+    """
+    Parse a USFM (plain text) file and return a DataFrame with book, chapter, verse, and text.
+
+    USFM uses backslash markers like \\c for chapters and \\v for verses.
+
+    Args:
+        file_path: Path to the USFM file to parse.
+        include_headings: If True (default), include verse 0 rows containing
+            chapter/section headings. If False, only include actual verses.
+
+    Returns:
+        A DataFrame with columns:
+        - 'book': The book code (e.g., '1CO', 'GEN')
+        - 'chapter': The chapter number (int)
+        - 'verse': The verse number (int, 0 for chapter headings if include_headings=True)
+        - 'text': The verse text content
+    """
+    file_path = Path(file_path)
+    
+    rows: List[Dict[str, object]] = []
+    current_book: str = None
+    current_chapter: int = None
+    current_verse: int = None
+    current_verse_text: List[str] = []
+    chapter_heading_buf: List[str] = []
+    chapter_heading_emitted: bool = True
+    
+    # Try to extract book code from filename (e.g., "1CO.usfm" -> "1CO")
+    book_code_from_filename = file_path.stem.upper()
+    
+    def save_current_verse():
+        nonlocal current_verse_text
+        if current_book and current_chapter and current_verse is not None:
+            text = " ".join(current_verse_text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                rows.append({
+                    "book": current_book,
+                    "chapter": current_chapter,
+                    "verse": current_verse,
+                    "text": text
+                })
+        current_verse_text = []
+    
+    def emit_chapter_heading():
+        nonlocal chapter_heading_emitted, chapter_heading_buf
+        if not chapter_heading_emitted and include_headings and chapter_heading_buf:
+            heading_text = " ".join(chapter_heading_buf)
+            heading_text = re.sub(r"\s+", " ", heading_text).strip()
+            if heading_text:
+                rows.append({
+                    "book": current_book,
+                    "chapter": current_chapter,
+                    "verse": 0,
+                    "text": heading_text
+                })
+        chapter_heading_emitted = True
+        chapter_heading_buf = []
+    
+    def clean_text(text: str) -> str:
+        """Remove USFM inline markers and footnotes from text."""
+        # Remove footnote content: \f ... \f*
+        text = re.sub(r'\\f\s.*?\\f\*', '', text)
+        # Remove cross-references: \x ... \x*
+        text = re.sub(r'\\x\s.*?\\x\*', '', text)
+        # Remove other inline markers like \add, \nd, etc.
+        text = re.sub(r'\\[a-z]+\d?\*?', '', text)
+        # Remove remaining backslash markers
+        text = re.sub(r'\\[a-zA-Z]+\d?', '', text)
+        return text.strip()
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            tokens = line.split()
+            if not tokens:
+                continue
+            
+            marker = tokens[0]
+            
+            # Book ID marker: \id BOOK
+            if marker == '\\id' and len(tokens) > 1:
+                current_book = tokens[1].upper()
+                continue
+            
+            # Also check for \h marker which often contains book code
+            if marker == '\\h' and current_book is None and len(tokens) > 1:
+                # Try to use filename as book code
+                current_book = book_code_from_filename
+            
+            # Chapter marker: \c NUMBER
+            if marker == '\\c' and len(tokens) > 1:
+                # Save any pending verse
+                save_current_verse()
+                # Emit previous chapter's heading if not done
+                emit_chapter_heading()
+                
+                try:
+                    current_chapter = int(tokens[1])
+                except ValueError:
+                    continue
+                current_verse = None
+                chapter_heading_emitted = False
+                chapter_heading_buf = []
+                
+                # Use filename as book code if not set
+                if current_book is None:
+                    current_book = book_code_from_filename
+                continue
+            
+            # Heading markers (before first verse)
+            if marker in USFM_HEADING_MARKERS or marker.rstrip('0123456789') in {'\\s', '\\mt', '\\ms'}:
+                if current_chapter is not None and not chapter_heading_emitted:
+                    heading_text = clean_text(" ".join(tokens[1:]))
+                    if heading_text:
+                        chapter_heading_buf.append(heading_text)
+                continue
+            
+            # Verse marker: \v NUMBER text...
+            if marker == '\\v' and len(tokens) > 1:
+                # Save previous verse
+                save_current_verse()
+                # Emit chapter heading before first verse
+                emit_chapter_heading()
+                
+                # Parse verse number (handle ranges like "1-2")
+                verse_str = tokens[1]
+                try:
+                    # Handle verse ranges by taking first number
+                    verse_num = int(re.match(r'(\d+)', verse_str).group(1))
+                    current_verse = verse_num
+                except (ValueError, AttributeError):
+                    continue
+                
+                # Rest of line is verse text
+                verse_text = clean_text(" ".join(tokens[2:]))
+                if verse_text:
+                    current_verse_text.append(verse_text)
+                continue
+            
+            # Paragraph markers with text: \p, \q, \q1, \q2, \m, etc.
+            if marker.startswith('\\') and current_verse is not None:
+                # This is continuation text for the current verse
+                text = clean_text(" ".join(tokens[1:]) if len(tokens) > 1 else "")
+                if text:
+                    current_verse_text.append(text)
+    
+    # Save final verse
+    save_current_verse()
+    
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(by=["book", "chapter", "verse"], kind="stable").reset_index(drop=True)
+    return df
+
+
+def scripture_to_dataframe(
+    file_path: Union[str, Path],
+    include_headings: bool = True,
+) -> pd.DataFrame:
+    """
+    Parse a scripture file (USX or USFM) and return a DataFrame.
+    
+    Automatically detects the file format based on extension and content.
+
+    Args:
+        file_path: Path to the USX or USFM file to parse.
+        include_headings: If True (default), include verse 0 rows containing
+            chapter/section headings. If False, only include actual verses.
+
+    Returns:
+        A DataFrame with columns:
+        - 'book': The book code (e.g., '1CO', 'GEN')
+        - 'chapter': The chapter number (int)
+        - 'verse': The verse number (int, 0 for chapter headings if include_headings=True)
+        - 'text': The verse text content
+    """
+    file_path = Path(file_path)
+    extension = file_path.suffix.lower()
+    
+    # Check extension first
+    if extension == '.usx':
+        return usx_to_dataframe(file_path, include_headings)
+    elif extension in ('.usfm', '.sfm'):
+        return usfm_to_dataframe(file_path, include_headings)
+    
+    # Try to detect format by reading first few bytes
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            start = f.read(100).strip()
+        
+        # Check if it looks like XML
+        if start.startswith('<?xml') or start.startswith('<usx') or start.startswith('<USX'):
+            return usx_to_dataframe(file_path, include_headings)
+        
+        # Check if it looks like USFM (starts with backslash marker)
+        if start.startswith('\\'):
+            return usfm_to_dataframe(file_path, include_headings)
+        
+        # Default to USFM for unknown formats
+        return usfm_to_dataframe(file_path, include_headings)
+        
+    except Exception:
+        # If detection fails, try USX first, then USFM
+        try:
+            return usx_to_dataframe(file_path, include_headings)
+        except ET.ParseError:
+            return usfm_to_dataframe(file_path, include_headings)
+
+
+def scripture_directory_to_dataframe(
+    directory_path: Union[str, Path],
+    include_headings: bool = True,
+) -> pd.DataFrame:
+    """
+    Parse all scripture files (USX and USFM) in a directory and return a combined DataFrame.
+
+    Args:
+        directory_path: Path to the directory containing scripture files.
+        include_headings: If True (default), include verse 0 rows containing
+            chapter/section headings. If False, only include actual verses.
+
+    Returns:
+        A DataFrame with columns 'book', 'chapter', 'verse', and 'text',
+        combining all scripture files found in the directory.
+    """
+    directory_path = Path(directory_path)
+    
+    # Find all scripture files
+    scripture_files = []
+    for ext in ['*.usx', '*.USX', '*.usfm', '*.USFM', '*.sfm', '*.SFM']:
+        scripture_files.extend(directory_path.glob(ext))
+    
+    scripture_files = sorted(set(scripture_files))
+    
+    dfs = []
+    for scripture_file in scripture_files:
+        df = scripture_to_dataframe(scripture_file, include_headings=include_headings)
         dfs.append(df)
     
     if dfs:
