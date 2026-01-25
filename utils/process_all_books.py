@@ -30,10 +30,12 @@ def get_audio_folder(book_folder_path):
     audio_folder, audio_files = find_audio_files(book_folder_path)
     return audio_folder
 
-def build_dataframe(base_path):
+def build_dataframe(base_path, timing_folder=None, usfm_folder=None):
     """Build a dataframe with all books to process"""
-    timing_folder = os.path.join(base_path, "Timing Files/Timing Files Bundle")
-    usfm_folder = os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path), "Paratext (USFM)/release/USX_1")
+    if timing_folder is None:
+        timing_folder = os.path.join(base_path, "Timing Files/Timing Files Bundle")
+    if usfm_folder is None:
+        usfm_folder = os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path), "Paratext (USFM)/release/USX_1")
     output_base = os.path.join(base_path, "Alignment")
     
     rows = []
@@ -168,6 +170,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process all Bible books for a given language')
     parser.add_argument('-base_path', '--base_path', type=str, required=True,
                         help='Base path to audio files (e.g., data/audios/Lingala)')
+    parser.add_argument('-timing_folder', '--timing_folder', type=str, default=None,
+                        help='Path to timing files folder (default: <base_path>/Timing Files/Timing Files Bundle)')
+    parser.add_argument('-usfm_folder', '--usfm_folder', type=str, default=None,
+                        help='Path to USFM files folder (default: data/texts/<language>/Paratext (USFM)/release/USX_1)')
     parser.add_argument('-workers', '--workers', type=int, default=8,
                         help='Number of parallel workers (default: 8)')
     args = parser.parse_args()
@@ -177,7 +183,7 @@ if __name__ == '__main__':
     print(f"{'='*60}")
     
     # Build and display the dataframe
-    df = build_dataframe(args.base_path)
+    df = build_dataframe(args.base_path, args.timing_folder, args.usfm_folder)
     
     if len(df) == 0:
         print("ERROR: No valid books found. Check folder structure and audio files.")
