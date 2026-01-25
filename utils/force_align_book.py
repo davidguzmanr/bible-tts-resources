@@ -37,7 +37,30 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 # Import the scripture parser from the same directory (handles both USX and USFM)
-from .usx_parser import scripture_to_dataframe
+from usx_parser import scripture_to_dataframe
+
+
+def strip_numbers_from_text(text: str) -> str:
+    """
+    Remove standalone numbers from text to avoid g2p issues.
+    
+    Numbers like "365", "120", "600" cause g2p conversion failures.
+    This removes them while preserving the rest of the text structure.
+    
+    Args:
+        text: Input text that may contain numbers
+        
+    Returns:
+        Text with standalone numbers removed
+    """
+    # Remove standalone numbers (surrounded by whitespace or punctuation)
+    # This pattern matches numbers that are whole words (not part of other words)
+    stripped = re.sub(r'\b\d+\b', '', text)
+    # Clean up any double spaces left behind
+    stripped = re.sub(r'  +', ' ', stripped)
+    # Clean up spaces before punctuation
+    stripped = re.sub(r' ([,;:.!?])', r'\1', stripped)
+    return stripped.strip()
 
 
 def get_chapter_audio_files(audio_folder: str) -> Dict[int, str]:
@@ -68,21 +91,27 @@ def prepare_verse_text_file(
     df: pd.DataFrame, 
     chapter: int, 
     output_path: str,
-    include_headings: bool = False
+    include_headings: bool = False,
+    strip_numbers: bool = True,
 ) -> List[Tuple[int, str]]:
     """
     Prepare a text file for readalongs alignment from the verse DataFrame.
     
     Each verse is written as a separate line (which becomes a sentence in readalongs).
+    Numbers can be optionally stripped from the alignment text to avoid g2p issues,
+    while the returned verses list contains the original text with numbers.
     
     Args:
         df: DataFrame with columns ['book', 'chapter', 'verse', 'text']
         chapter: Chapter number to extract
         output_path: Path to write the text file
         include_headings: Whether to include verse 0 (chapter headings)
+        strip_numbers: Whether to strip numbers from the alignment text (default True)
     
     Returns:
-        List of (verse_number, text) tuples for verses included in the file
+        List of (verse_number, original_text) tuples for verses included in the file.
+        Note: The returned text is the ORIGINAL text (with numbers), while the file
+        written to output_path has numbers stripped if strip_numbers=True.
     """
     chapter_df = df[df['chapter'] == chapter].copy()
     
@@ -94,10 +123,16 @@ def prepare_verse_text_file(
     verses = []
     with open(output_path, 'w', encoding='utf-8') as f:
         for _, row in chapter_df.iterrows():
-            text = str(row['text']).strip()
-            if text:  # Only include non-empty verses
-                f.write(text + '\n')
-                verses.append((int(row['verse']), text))
+            original_text = str(row['text']).strip()
+            if original_text:  # Only include non-empty verses
+                # Write stripped text for alignment (numbers removed)
+                if strip_numbers:
+                    alignment_text = strip_numbers_from_text(original_text)
+                else:
+                    alignment_text = original_text
+                f.write(alignment_text + '\n')
+                # Return original text (with numbers) for transcript saving
+                verses.append((int(row['verse']), original_text))
     
     return verses
 
@@ -106,7 +141,7 @@ def run_readalongs_alignment(
     text_file: str,
     audio_file: str,
     output_dir: str,
-    language: str = "und",
+    languages: List[str] = None,
     save_temps: bool = False,
 ) -> Tuple[bool, str]:
     """
@@ -116,12 +151,15 @@ def run_readalongs_alignment(
         text_file: Path to the plain text file
         audio_file: Path to the audio file
         output_dir: Directory to save alignment output
-        language: Language code for g2p (default "und" for undetermined)
+        languages: List of language codes for g2p (first is primary, rest are fallbacks)
         save_temps: Whether to save temporary files
     
     Returns:
         Tuple of (success, message)
     """
+    if languages is None:
+        languages = ["und"]
+    
     try:
         # Import readalongs API
         from readalongs.api import align
@@ -134,7 +172,7 @@ def run_readalongs_alignment(
             textfile=text_file,
             audiofile=audio_file,
             output_base=output_dir,
-            language=[language],
+            language=languages,  # Pass list of languages for g2p cascade/fallback
             output_formats=["textgrid"],  # TextGrid gives us word timings
             save_temps=save_temps,
             force_overwrite=True,
@@ -143,18 +181,20 @@ def run_readalongs_alignment(
         if status == 0:
             return True, "Alignment successful"
         else:
-            return False, f"Alignment failed: {exception}\n{log}"
+            # Use repr() to safely convert exception, as some exceptions have broken __str__
+            exc_str = repr(exception) if exception else "Unknown error"
+            return False, f"Alignment failed: {exc_str}\n{log}"
             
     except ImportError:
         # Fall back to CLI if API import fails
-        return run_readalongs_cli(text_file, audio_file, output_dir, language, save_temps)
+        return run_readalongs_cli(text_file, audio_file, output_dir, languages, save_temps)
 
 
 def run_readalongs_cli(
     text_file: str,
     audio_file: str,
     output_dir: str,
-    language: str = "und",
+    languages: List[str] = None,
     save_temps: bool = False,
 ) -> Tuple[bool, str]:
     """
@@ -162,12 +202,15 @@ def run_readalongs_cli(
     
     Fallback method if the Python API is not available.
     """
+    if languages is None:
+        languages = ["und"]
+    
     cmd = [
         "readalongs", "align",
         text_file,
         audio_file,
         output_dir,
-        "-l", language,
+        "-l", ",".join(languages),  # Multiple languages separated by comma for g2p cascade
         "-o", "textgrid",
         "-f",  # force overwrite
     ]
@@ -368,9 +411,10 @@ def process_book(
     audio_folder: str,
     book_usx: str,
     output_folder: str,
-    language: str = "und",
+    languages: List[str] = None,
     include_headings: bool = False,
     save_temps: bool = False,
+    strip_numbers: bool = True,
 ) -> Dict[str, any]:
     """
     Process an entire Bible book: parse USX, align chapters, split into verses.
@@ -379,13 +423,16 @@ def process_book(
         audio_folder: Folder containing chapter audio files
         book_usx: Path to USX or USFM file
         output_folder: Output folder for verse audio and text files
-        language: Language code for g2p
+        languages: List of language codes for g2p (first is primary, rest are fallbacks)
         include_headings: Whether to include chapter headings (verse 0)
         save_temps: Whether to save temporary alignment files
+        strip_numbers: Whether to strip numbers from alignment text (to avoid g2p issues)
     
     Returns:
         Dict with processing statistics
     """
+    if languages is None:
+        languages = ["und"]
     stats = {
         'book': None,
         'chapters_processed': 0,
@@ -434,14 +481,14 @@ def process_book(
             print(f"\n  Chapter {chapter}: No audio file found, skipping")
             continue
         
-        print(f"\n  Processing Chapter {chapter}...")
+        print(f"\n  Processing {book_code} Chapter {chapter}...")
         audio_file = chapter_audio[chapter]
         
         # Create temp directory for alignment output
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Prepare verse text file
+            # Prepare verse text file (numbers stripped for alignment, but kept in verses list)
             text_file = os.path.join(temp_dir, f"chapter_{chapter}.txt")
-            verses = prepare_verse_text_file(df, chapter, text_file, include_headings)
+            verses = prepare_verse_text_file(df, chapter, text_file, include_headings, strip_numbers)
             
             if not verses:
                 print(f"    No verses found for chapter {chapter}")
@@ -452,7 +499,7 @@ def process_book(
             # Run alignment
             align_output = os.path.join(temp_dir, f"aligned_{chapter}")
             success, message = run_readalongs_alignment(
-                text_file, audio_file, align_output, language, save_temps
+                text_file, audio_file, align_output, languages, save_temps
             )
             
             if not success:
@@ -522,6 +569,12 @@ def main():
         help="Language code for g2p (default: 'und' for undetermined)"
     )
     parser.add_argument(
+        "--g2p-fallback",
+        default=None,
+        help="Fallback language(s) for g2p when primary fails (e.g., 'eng' for numbers). "
+             "Can specify multiple comma-separated (e.g., 'eng,fra')"
+    )
+    parser.add_argument(
         "--include-headings",
         action="store_true",
         help="Include chapter headings (verse 0) in alignment"
@@ -531,8 +584,19 @@ def main():
         action="store_true",
         help="Save temporary alignment files for debugging"
     )
+    parser.add_argument(
+        "--keep-numbers",
+        action="store_true",
+        help="Keep numbers in alignment text (by default, numbers are stripped to avoid g2p issues)"
+    )
     
     args = parser.parse_args()
+    
+    # Build languages list (primary + fallbacks)
+    languages = [args.language]
+    if args.g2p_fallback:
+        fallbacks = [lang.strip() for lang in args.g2p_fallback.split(",")]
+        languages.extend(fallbacks)
     
     print("=" * 60)
     print("Force Alignment using ReadAlongs Studio")
@@ -541,6 +605,9 @@ def main():
     print(f"Book USX: {args.book_usx}")
     print(f"Output folder: {args.output}")
     print(f"Language: {args.language}")
+    if args.g2p_fallback:
+        print(f"G2P fallback: {args.g2p_fallback}")
+    print(f"Strip numbers: {not args.keep_numbers}")
     
     # Verify paths exist
     if not os.path.exists(args.audio_folder):
@@ -556,9 +623,10 @@ def main():
         audio_folder=args.audio_folder,
         book_usx=args.book_usx,
         output_folder=args.output,
-        language=args.language,
+        languages=languages,
         include_headings=args.include_headings,
         save_temps=args.save_temps,
+        strip_numbers=not args.keep_numbers,
     )
     
     # Print summary
