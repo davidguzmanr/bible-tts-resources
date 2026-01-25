@@ -93,7 +93,8 @@ def prepare_verse_text_file(
     output_path: str,
     include_headings: bool = False,
     strip_numbers: bool = True,
-) -> List[Tuple[int, str]]:
+    chapter_intro: Optional[str] = None,
+) -> Tuple[List[Tuple[int, str]], bool]:
     """
     Prepare a text file for readalongs alignment from the verse DataFrame.
     
@@ -107,11 +108,15 @@ def prepare_verse_text_file(
         output_path: Path to write the text file
         include_headings: Whether to include verse 0 (chapter headings)
         strip_numbers: Whether to strip numbers from the alignment text (default True)
+        chapter_intro: Optional placeholder text for chapter intro (e.g., speaker announcing chapter).
+                      If provided, this is prepended as first line to absorb intro speech.
     
     Returns:
-        List of (verse_number, original_text) tuples for verses included in the file.
-        Note: The returned text is the ORIGINAL text (with numbers), while the file
-        written to output_path has numbers stripped if strip_numbers=True.
+        Tuple of:
+        - List of (verse_number, original_text) tuples for verses included in the file.
+          Note: The returned text is the ORIGINAL text (with numbers), while the file
+          written to output_path has numbers stripped if strip_numbers=True.
+        - Boolean indicating whether a chapter intro line was added
     """
     chapter_df = df[df['chapter'] == chapter].copy()
     
@@ -121,7 +126,13 @@ def prepare_verse_text_file(
     chapter_df = chapter_df.sort_values('verse')
     
     verses = []
+    has_intro = False
     with open(output_path, 'w', encoding='utf-8') as f:
+        # Add chapter intro placeholder if specified (to absorb speaker's intro speech)
+        if chapter_intro:
+            f.write(chapter_intro + '\n')
+            has_intro = True
+        
         for _, row in chapter_df.iterrows():
             original_text = str(row['text']).strip()
             if original_text:  # Only include non-empty verses
@@ -134,7 +145,7 @@ def prepare_verse_text_file(
                 # Return original text (with numbers) for transcript saving
                 verses.append((int(row['verse']), original_text))
     
-    return verses
+    return verses, has_intro
 
 
 def run_readalongs_alignment(
@@ -359,6 +370,7 @@ def split_audio_by_verses(
 def match_verses_to_sentences(
     verses: List[Tuple[int, str]],
     sentences: List[Tuple[float, float, str]],
+    skip_intro: bool = False,
 ) -> List[Tuple[int, float, float]]:
     """
     Match verse numbers to sentence timings.
@@ -369,11 +381,16 @@ def match_verses_to_sentences(
     Args:
         verses: List of (verse_number, text) tuples
         sentences: List of (start_time, end_time, text) tuples from alignment
+        skip_intro: If True, skip the first sentence (used when chapter intro placeholder was added)
     
     Returns:
         List of (verse_number, start_time, end_time) tuples
     """
     verse_timings = []
+    
+    # Skip intro sentence if present
+    if skip_intro and len(sentences) > 0:
+        sentences = sentences[1:]
     
     # Simple 1:1 matching by order
     for i, (verse_num, verse_text) in enumerate(verses):
@@ -415,6 +432,7 @@ def process_book(
     include_headings: bool = False,
     save_temps: bool = False,
     strip_numbers: bool = True,
+    chapter_intro: Optional[str] = None,
 ) -> Dict[str, any]:
     """
     Process an entire Bible book: parse USX, align chapters, split into verses.
@@ -427,6 +445,7 @@ def process_book(
         include_headings: Whether to include chapter headings (verse 0)
         save_temps: Whether to save temporary alignment files
         strip_numbers: Whether to strip numbers from alignment text (to avoid g2p issues)
+        chapter_intro: Optional placeholder text for chapter intros (absorbs speaker intro speech)
     
     Returns:
         Dict with processing statistics
@@ -488,7 +507,9 @@ def process_book(
         with tempfile.TemporaryDirectory() as temp_dir:
             # Prepare verse text file (numbers stripped for alignment, but kept in verses list)
             text_file = os.path.join(temp_dir, f"chapter_{chapter}.txt")
-            verses = prepare_verse_text_file(df, chapter, text_file, include_headings, strip_numbers)
+            verses, has_intro = prepare_verse_text_file(
+                df, chapter, text_file, include_headings, strip_numbers, chapter_intro
+            )
             
             if not verses:
                 print(f"    No verses found for chapter {chapter}")
@@ -526,8 +547,8 @@ def process_book(
             
             print(f"    Aligned sentences: {len(sentences)}")
             
-            # Match verses to sentence timings
-            verse_timings = match_verses_to_sentences(verses, sentences)
+            # Match verses to sentence timings (skip intro sentence if present)
+            verse_timings = match_verses_to_sentences(verses, sentences, skip_intro=has_intro)
             
             # Split audio into verses
             num_extracted = split_audio_by_verses(
@@ -589,6 +610,12 @@ def main():
         action="store_true",
         help="Keep numbers in alignment text (by default, numbers are stripped to avoid g2p issues)"
     )
+    parser.add_argument(
+        "--chapter-intro",
+        default=None,
+        help="Placeholder text for chapter intro speech (e.g., speaker announcing chapter name). "
+             "This absorbs any intro speech not in the transcript, improving verse 1 alignment."
+    )
     
     args = parser.parse_args()
     
@@ -608,6 +635,8 @@ def main():
     if args.g2p_fallback:
         print(f"G2P fallback: {args.g2p_fallback}")
     print(f"Strip numbers: {not args.keep_numbers}")
+    if args.chapter_intro:
+        print(f"Chapter intro placeholder: {args.chapter_intro}")
     
     # Verify paths exist
     if not os.path.exists(args.audio_folder):
@@ -627,6 +656,7 @@ def main():
         include_headings=args.include_headings,
         save_temps=args.save_temps,
         strip_numbers=not args.keep_numbers,
+        chapter_intro=args.chapter_intro,
     )
     
     # Print summary
