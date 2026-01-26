@@ -72,39 +72,41 @@ def find_usx_file(usfm_folder: str, book_code: str) -> str | None:
     return None
 
 
-def build_dataframe(base_path: str) -> pd.DataFrame:
+def build_dataframe(base_path: str, usfm_folder: str | None = None) -> pd.DataFrame:
     """
     Build a dataframe with all books to process.
     
     Args:
         base_path: Base path to audio files (e.g., data/audios/Lingala)
+        usfm_folder: Path to USFM/USX files folder (optional, auto-detected if not provided)
     
     Returns:
         DataFrame with columns: book_name, book_code, testament, audio_folder,
                                book_usx, output, usx_exists
     """
     # Look for USX files in the expected location
-    usfm_folder = os.path.join(
-        os.path.dirname(os.path.dirname(base_path)), 
-        "texts", 
-        os.path.basename(base_path), 
-        "Paratext (USFM)/release/USX_1"
-    )
-    
-    # Alternative locations to check
-    alt_usfm_folders = [
-        os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path), "USX"),
-        os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path)),
-        os.path.join(base_path, "USX"),
-        os.path.join(base_path, "texts"),
-    ]
-    
-    # Find the first existing USX folder
-    if not os.path.exists(usfm_folder):
-        for alt_folder in alt_usfm_folders:
-            if os.path.exists(alt_folder):
-                usfm_folder = alt_folder
-                break
+    if usfm_folder is None:
+        usfm_folder = os.path.join(
+            os.path.dirname(os.path.dirname(base_path)), 
+            "texts", 
+            os.path.basename(base_path), 
+            "Paratext (USFM)/release/USX_1"
+        )
+        
+        # Alternative locations to check
+        alt_usfm_folders = [
+            os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path), "USX"),
+            os.path.join(os.path.dirname(os.path.dirname(base_path)), "texts", os.path.basename(base_path)),
+            os.path.join(base_path, "USX"),
+            os.path.join(base_path, "texts"),
+        ]
+        
+        # Find the first existing USX folder
+        if not os.path.exists(usfm_folder):
+            for alt_folder in alt_usfm_folders:
+                if os.path.exists(alt_folder):
+                    usfm_folder = alt_folder
+                    break
     
     output_base = os.path.join(base_path, "Alignment")
     
@@ -158,6 +160,7 @@ def process_single_book(
     row: dict, 
     script_path: str = "utils/force_align_book.py",
     language: str = "und",
+    chapter_intro: str | None = None,
 ) -> str:
     """
     Process a single book using force alignment.
@@ -166,6 +169,7 @@ def process_single_book(
         row: DataFrame row with book information
         script_path: Path to the force_align_book.py script
         language: Language code for g2p
+        chapter_intro: Optional placeholder text for chapter intro speech
     
     Returns:
         Status message
@@ -180,6 +184,9 @@ def process_single_book(
         "-output", row['output'],
         "-language", language,
     ]
+    
+    if chapter_intro:
+        cmd.extend(["--chapter-intro", chapter_intro])
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     
@@ -197,6 +204,7 @@ def run_processing(
     script_path: str = "utils/force_align_book.py",
     language: str = "und",
     max_workers: int = 4,
+    chapter_intro: str | None = None,
 ):
     """
     Run force alignment for all books in the dataframe.
@@ -206,6 +214,7 @@ def run_processing(
         script_path: Path to the force_align_book.py script
         language: Language code for g2p
         max_workers: Number of parallel workers
+        chapter_intro: Optional placeholder text for chapter intro speech
     """
     # Filter to only books with USX files
     df_to_process = df[df['usx_exists']].copy()
@@ -224,7 +233,7 @@ def run_processing(
         # Submit all tasks
         future_to_book = {
             executor.submit(
-                process_single_book, row.to_dict(), script_path, language
+                process_single_book, row.to_dict(), script_path, language, chapter_intro
             ): row['book_name']
             for _, row in df_to_process.iterrows()
         }
@@ -251,6 +260,12 @@ def main():
         help='Base path to audio files (e.g., data/audios/Lingala)'
     )
     parser.add_argument(
+        '-usfm_folder', '--usfm_folder',
+        type=str,
+        default=None,
+        help='Path to USFM/USX files folder (default: auto-detected)'
+    )
+    parser.add_argument(
         '-language', '--language',
         type=str,
         default="und",
@@ -267,6 +282,12 @@ def main():
         action='store_true',
         help='Show what would be processed without actually processing'
     )
+    parser.add_argument(
+        '--chapter-intro',
+        type=str,
+        default=None,
+        help='Placeholder text for chapter intro speech (e.g., speaker announcing chapter)'
+    )
     
     args = parser.parse_args()
     
@@ -275,9 +296,12 @@ def main():
     print("Force Alignment - Process All Books")
     print("=" * 60)
     print(f"Base path: {args.base_path}")
+    print(f"USFM folder: {args.usfm_folder or '(auto-detected)'}")
     print(f"Language: {args.language}")
+    if args.chapter_intro:
+        print(f"Chapter intro: {args.chapter_intro}")
     
-    df = build_dataframe(args.base_path)
+    df = build_dataframe(args.base_path, args.usfm_folder)
     
     if df.empty:
         print("No books found to process.")
@@ -314,7 +338,8 @@ def main():
     run_processing(
         df, 
         language=args.language,
-        max_workers=args.workers
+        max_workers=args.workers,
+        chapter_intro=args.chapter_intro
     )
     print("\n=== All Processing Complete ===")
     

@@ -40,27 +40,37 @@ import pandas as pd
 from usx_parser import scripture_to_dataframe
 
 
-def strip_numbers_from_text(text: str) -> str:
+def clean_text_for_alignment(text: str) -> str:
     """
-    Remove standalone numbers from text to avoid g2p issues.
+    Clean text for alignment by removing characters that cause g2p issues.
     
-    Numbers like "365", "120", "600" cause g2p conversion failures.
-    This removes them while preserving the rest of the text structure.
+    Removes:
+    - Standalone numbers (365, 120, 600) that can't be converted to phonemes
+    - Punctuation marks (:, ;, ., ,, !, ?, ", ', etc.) that cause g2p failures
+    
+    Preserves:
+    - All Unicode letters (Latin, Arabic, Hebrew, Cyrillic, CJK, etc.)
+    - Spaces between words
     
     Args:
-        text: Input text that may contain numbers
+        text: Input text that may contain numbers and punctuation
         
     Returns:
-        Text with standalone numbers removed
+        Text with numbers and punctuation removed, preserving all scripts
     """
-    # Remove standalone numbers (surrounded by whitespace or punctuation)
-    # This pattern matches numbers that are whole words (not part of other words)
-    stripped = re.sub(r'\b\d+\b', '', text)
-    # Clean up any double spaces left behind
-    stripped = re.sub(r'  +', ' ', stripped)
-    # Clean up spaces before punctuation
-    stripped = re.sub(r' ([,;:.!?])', r'\1', stripped)
-    return stripped.strip()
+    # Remove standalone numbers (whole words only, not part of other text)
+    cleaned = re.sub(r'\b\d+\b', '', text)
+    
+    # Remove punctuation marks that cause g2p issues
+    # This keeps all Unicode letters (\w matches [a-zA-Z0-9_] + Unicode letters)
+    # We remove common punctuation: : ; , . ! ? " ' « » ( ) [ ] { } - – — / \ etc.
+    # Using a character class to be explicit about what we remove
+    cleaned = re.sub(r'[:\;\,\.\!\?\"\'\«\»\(\)\[\]\{\}\-\–\—\/\\<>@#$%^&*+=|~`]', '', cleaned)
+    
+    # Clean up multiple spaces left behind
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    
+    return cleaned.strip()
 
 
 def get_chapter_audio_files(audio_folder: str) -> Dict[int, str]:
@@ -92,30 +102,30 @@ def prepare_verse_text_file(
     chapter: int, 
     output_path: str,
     include_headings: bool = False,
-    strip_numbers: bool = True,
+    clean_text: bool = True,
     chapter_intro: Optional[str] = None,
 ) -> Tuple[List[Tuple[int, str]], bool]:
     """
     Prepare a text file for readalongs alignment from the verse DataFrame.
     
     Each verse is written as a separate line (which becomes a sentence in readalongs).
-    Numbers can be optionally stripped from the alignment text to avoid g2p issues,
-    while the returned verses list contains the original text with numbers.
+    Text can be optionally cleaned (numbers and punctuation removed) to avoid g2p issues,
+    while the returned verses list contains the original text.
     
     Args:
         df: DataFrame with columns ['book', 'chapter', 'verse', 'text']
         chapter: Chapter number to extract
         output_path: Path to write the text file
         include_headings: Whether to include verse 0 (chapter headings)
-        strip_numbers: Whether to strip numbers from the alignment text (default True)
+        clean_text: Whether to clean text for alignment (remove numbers/punctuation, default True)
         chapter_intro: Optional placeholder text for chapter intro (e.g., speaker announcing chapter).
                       If provided, this is prepended as first line to absorb intro speech.
     
     Returns:
         Tuple of:
         - List of (verse_number, original_text) tuples for verses included in the file.
-          Note: The returned text is the ORIGINAL text (with numbers), while the file
-          written to output_path has numbers stripped if strip_numbers=True.
+          Note: The returned text is the ORIGINAL text (with numbers/punctuation), while the file
+          written to output_path is cleaned if clean_text=True.
         - Boolean indicating whether a chapter intro line was added
     """
     chapter_df = df[df['chapter'] == chapter].copy()
@@ -136,13 +146,13 @@ def prepare_verse_text_file(
         for _, row in chapter_df.iterrows():
             original_text = str(row['text']).strip()
             if original_text:  # Only include non-empty verses
-                # Write stripped text for alignment (numbers removed)
-                if strip_numbers:
-                    alignment_text = strip_numbers_from_text(original_text)
+                # Write cleaned text for alignment (numbers and punctuation removed)
+                if clean_text:
+                    alignment_text = clean_text_for_alignment(original_text)
                 else:
                     alignment_text = original_text
                 f.write(alignment_text + '\n')
-                # Return original text (with numbers) for transcript saving
+                # Return original text (with numbers/punctuation) for transcript saving
                 verses.append((int(row['verse']), original_text))
     
     return verses, has_intro
@@ -431,7 +441,7 @@ def process_book(
     languages: List[str] = None,
     include_headings: bool = False,
     save_temps: bool = False,
-    strip_numbers: bool = True,
+    clean_text: bool = True,
     chapter_intro: Optional[str] = None,
 ) -> Dict[str, any]:
     """
@@ -444,7 +454,7 @@ def process_book(
         languages: List of language codes for g2p (first is primary, rest are fallbacks)
         include_headings: Whether to include chapter headings (verse 0)
         save_temps: Whether to save temporary alignment files
-        strip_numbers: Whether to strip numbers from alignment text (to avoid g2p issues)
+        clean_text: Whether to clean text for alignment (remove numbers/punctuation)
         chapter_intro: Optional placeholder text for chapter intros (absorbs speaker intro speech)
     
     Returns:
@@ -508,7 +518,7 @@ def process_book(
             # Prepare verse text file (numbers stripped for alignment, but kept in verses list)
             text_file = os.path.join(temp_dir, f"chapter_{chapter}.txt")
             verses, has_intro = prepare_verse_text_file(
-                df, chapter, text_file, include_headings, strip_numbers, chapter_intro
+                df, chapter, text_file, include_headings, clean_text, chapter_intro
             )
             
             if not verses:
@@ -606,9 +616,10 @@ def main():
         help="Save temporary alignment files for debugging"
     )
     parser.add_argument(
-        "--keep-numbers",
+        "--keep-numbers", "--no-clean",
         action="store_true",
-        help="Keep numbers in alignment text (by default, numbers are stripped to avoid g2p issues)"
+        help="Skip text cleaning for alignment (by default, numbers and punctuation like :;,.!? are "
+             "removed from alignment text to avoid g2p issues, but kept in final .txt files)"
     )
     parser.add_argument(
         "--chapter-intro",
@@ -634,7 +645,7 @@ def main():
     print(f"Language: {args.language}")
     if args.g2p_fallback:
         print(f"G2P fallback: {args.g2p_fallback}")
-    print(f"Strip numbers: {not args.keep_numbers}")
+    print(f"Clean text (remove numbers/punctuation): {not args.keep_numbers}")
     if args.chapter_intro:
         print(f"Chapter intro placeholder: {args.chapter_intro}")
     
@@ -655,7 +666,7 @@ def main():
         languages=languages,
         include_headings=args.include_headings,
         save_temps=args.save_temps,
-        strip_numbers=not args.keep_numbers,
+        clean_text=not args.keep_numbers,
         chapter_intro=args.chapter_intro,
     )
     
