@@ -39,6 +39,7 @@ import argparse
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -193,10 +194,15 @@ def process_single_book(
     if result.returncode == 0:
         return f"✓ Completed {row['book_name']} ({row['book_code']})"
     else:
-        # Extract a brief error message
+        # Extract error context (last 5 lines of stderr)
         error_lines = result.stderr.strip().split('\n')
-        error_msg = error_lines[-1] if error_lines else "Unknown error"
-        return f"✗ Failed {row['book_name']}: {error_msg[:100]}"
+        error_context = '\n'.join(error_lines[-5:]) if error_lines else "No stderr"
+        cmd_str = ' '.join(cmd)
+        return (
+            f"✗ Failed {row['book_name']} ({row['book_code']}) [exit code {result.returncode}]\n"
+            f"  Command: {cmd_str}\n"
+            f"  Error:\n{error_context}"
+        )
 
 
 def run_processing(
@@ -223,10 +229,13 @@ def run_processing(
         print("No books with USX files found to process.")
         return
     
+    start_time = datetime.now()
     print(f"\nProcessing {len(df_to_process)} books with {max_workers} parallel workers...")
+    print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     
     completed = 0
+    failed = 0
     total = len(df_to_process)
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -244,9 +253,20 @@ def run_processing(
             completed += 1
             try:
                 result = future.result()
-                print(f"[{completed}/{total}] {result}")
+                if result.startswith("✗"):
+                    failed += 1
+                timestamp = datetime.now().strftime('%H:%M:%S')
+                print(f"[{timestamp}] [{completed}/{total}] {result}")
             except Exception as e:
-                print(f"[{completed}/{total}] ✗ Error processing {book_name}: {e}")
+                failed += 1
+                timestamp = datetime.now().strftime('%H:%M:%S')
+                print(f"[{timestamp}] [{completed}/{total}] ✗ Error processing {book_name}: {type(e).__name__}: {e}")
+    
+    end_time = datetime.now()
+    elapsed = end_time - start_time
+    print("=" * 60)
+    print(f"Finished at: {end_time.strftime('%Y-%m-%d %H:%M:%S')} (elapsed: {elapsed})")
+    print(f"Results: {completed - failed} succeeded, {failed} failed out of {total} total")
 
 
 def main():
