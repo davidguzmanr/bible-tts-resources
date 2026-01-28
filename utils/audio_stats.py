@@ -14,9 +14,11 @@ from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 import math
 
-def get_audio_duration(file_path: Path, audio_format: str) -> float:
+def get_audio_duration(file_path: str | Path) -> float:
     """Get audio duration in seconds. Returns NaN if unreadable."""
     try:
+        file_path = Path(file_path)
+        audio_format = file_path.suffix.lower().lstrip(".")
         if audio_format == "mp3":
             audio = MP3(file_path)
         elif audio_format == "wav":
@@ -90,7 +92,7 @@ def get_all_audio_files(
         audio_format = audio_file.suffix.lower().lstrip(".")
         
         # Get duration (mutagen reads metadata without decoding the full file)
-        duration_seconds = get_audio_duration(audio_file, audio_format)
+        duration_seconds = get_audio_duration(audio_file)
         
         results.append({
             "language": language,

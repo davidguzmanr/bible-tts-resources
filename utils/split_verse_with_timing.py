@@ -119,8 +119,8 @@ if __name__ == '__main__':
                     # Parse the marker (e.g., "Verse 01", "Verse 14-15", "Chapter Title 01")
                     marker_parts = verse_time[0].split()
                     
-                    # Only process lines that start with "Verse"
-                    if len(marker_parts) < 2 or marker_parts[0] != "Verse":
+                    # Only process lines that start with "Verse" (case-insensitive)
+                    if len(marker_parts) < 2 or marker_parts[0].lower() != "verse":
                         continue
                     
                     # Get the verse number, handling ranges like "14-15" or "01- 04"
