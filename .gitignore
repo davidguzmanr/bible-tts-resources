@@ -213,6 +213,7 @@ jobs/
 open-bible-scripts/
 data-checker/
 Studio/
+pretrained_models/
 
 Swahili/
 Apali/
