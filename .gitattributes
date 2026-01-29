@@ -1,0 +1,5 @@
+# Ignore HTML files from language statistics
+*.html linguist-vendored
+
+# Ignore Jupyter notebooks from language statistics
+*.ipynb linguist-vendored
