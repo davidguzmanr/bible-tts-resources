@@ -1,4 +1,4 @@
-name: ReadAlongs
+name: bible-tts-resources
 channels:
   - conda-forge
   - defaults
@@ -181,5 +181,4 @@ dependencies:
     - wheel==0.45.1
     - xxhash==3.6.0
     - yarl==1.22.0
-prefix: /home/mila/g/guzmand/scratch/.conda/envs/ReadAlongs
 

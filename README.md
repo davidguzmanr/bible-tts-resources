@@ -2,7 +2,7 @@
 
 A toolkit for creating Text-to-Speech (TTS) datasets from Bible audio recordings. This project downloads, aligns, and processes Bible audio/text pairs from [Open.Bible](https://open.bible/) into verse-level segments suitable for TTS training.
 
-The full list of available languages is in [Bible audio resources clean](https://docs.google.com/spreadsheets/d/1P4xk-MgjP7nxWTuo8-pTmVTeICUw1dQOT7GXmjgjsSc/edit?usp=sharing).
+The full list of available languages is in [Bible audio resources clean](https://docs.google.com/spreadsheets/d/1P4xk-MgjP7nxWTuo8-pTmVTeICUw1dQOT7GXmjgjsSc/edit?gid=830487007#gid=830487007).
 
 ## Features
 
@@ -20,7 +20,7 @@ The full list of available languages is in [Bible audio resources clean](https:/
 ```bash
 # Create and activate the environment
 conda env create -f environment.yml
-conda activate ReadAlongs
+conda activate bible-tts-resources
 ```
 
 ### Using pip
