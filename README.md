@@ -137,24 +137,25 @@ print(df.groupby('language')['duration_seconds'].sum())
 
 ### 4. Check Data Quality
 
-Use the data-checker tool to validate TTS datasets:
+Use the data checks module to identify outliers and validate TTS datasets:
 
-```bash
-# Using Docker
-cd data-checker
-docker build . -t data-checker
-docker run --mount "type=bind,src=/path/to/data,dst=/mnt" data-checker \
-    python data_checks.py "/mnt/dataset.csv" 2
+```python
+from utils import data_checks
 
-# Or directly
-python data-checker/data_checks.py "path/to/dataset.csv" 2
+# Remove outliers from alignment DataFrame
+# Returns DataFrame with a 'label' column classifying each sample
+alignment_df = data_checks.remove_outliers(alignment_df, num_std_devs=2.0)
+
+# View label distribution
+print(alignment_df.label.value_counts())
 ```
 
-The checker validates:
-- Audio readability
-- Clip duration (flags clips > 30s)
-- Transcript length (flags transcripts < 10 chars)
-- Feature-to-transcript ratio anomalies
+The checker validates and labels samples as:
+- `BEST`: Clean samples suitable for TTS training
+- `TOO_LONG`: Audio clips over 30 seconds
+- `TOO_SHORT_TRANS`: Transcripts under 10 characters
+- `OFFENDING_DATA`: Pairs with more text than audio (bad for CTC)
+- `NON_NORMAL`: Pairs outside the specified standard deviations from mean ratio
 
 ## Output Format
 
